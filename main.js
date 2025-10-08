@@ -1,16 +1,20 @@
-// QuickVibe - Minimal spatial chat powered by Firebase Firestore (modular SDK)
+// QuickVibe - Minimal spatial chat powered by Firebase Realtime Database (modular SDK)
 // Students: Paste your own Firebase config below where indicated.
 
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js";
 import {
-    getFirestore,
-    collection,
-    addDoc,
+    getDatabase,
+    ref,
+    child,
+    push,
+    set,
+    remove,
+    onDisconnect,
     serverTimestamp,
-    onSnapshot,
+    onValue,
     query,
-    orderBy
-} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+    orderByChild
+} from "https://www.gstatic.com/firebasejs/12.3.0/firebase-database.js";
 
 // =====================
 // 1) Firebase Setup
@@ -23,28 +27,44 @@ import {
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
-    apiKey: "AIzaSyDHOrU4Lrtlmk-Af2svvlP8RiGsGvBLb_Q",
-    authDomain: "sharedmindss24.firebaseapp.com",
-    databaseURL: "https://sharedmindss24-default-rtdb.firebaseio.com",
-    projectId: "sharedmindss24",
-    storageBucket: "sharedmindss24.appspot.com",
-    messagingSenderId: "1039430447930",
-    appId: "1:1039430447930:web:edf98d7d993c21017ad603"
+    apiKey: "AIzaSyB3qxWLyU792p_GvKPVYG7SywtKmJ0_Hx8",
+    authDomain: "backendtest-d0dc6.firebaseapp.com",
+    projectId: "backendtest-d0dc6",
+    storageBucket: "backendtest-d0dc6.firebasestorage.app",
+    messagingSenderId: "701974952381",
+    appId: "1:701974952381:web:ef1b6563a48f00f95a3ad4",
+    measurementId: "G-9RPP665GDC"
 };
-// Initialize Firebase and Firestore
+// Initialize Firebase and Realtime Database
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const db = getDatabase(app);
+const messagesRef = ref(db, 'quickvibe_messages');
+const orderedMessagesQuery = query(messagesRef, orderByChild('createdAt'));
+const cursorsRef = ref(db, 'quickvibe_cursors');
+const clientId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2);
+const cursorRef = child(cursorsRef, clientId);
+onDisconnect(cursorRef).remove();
+window.addEventListener('beforeunload', () => {
+    remove(cursorRef).catch(() => { /* noop */ });
+});
+window.addEventListener('unload', () => {
+    remove(cursorRef).catch(() => { /* noop */ });
+});
 
 // =====================
 // 2) DOM Elements
 // =====================
 const stage = document.getElementById('stage');
 const input = document.getElementById('floating-input');
+const timeline = document.getElementById('timeline');
 
 // =====================
 // 3) Input positioning
 // =====================
 let pendingPosition = null; // { x, y } for the next message
+let lastCursorUpdate = 0;
 
 stage.addEventListener('click', (ev) => {
     const x = ev.clientX;
@@ -59,6 +79,23 @@ stage.addEventListener('click', (ev) => {
     input.focus();
 });
 
+stage.addEventListener('mousemove', (ev) => {
+    const x = ev.clientX;
+    const y = ev.clientY;
+    const now = Date.now();
+    if (now - lastCursorUpdate < 40) return;
+    lastCursorUpdate = now;
+    set(cursorRef, {
+        x,
+        y,
+        updatedAt: Date.now()
+    }).catch(() => { /* noop */ });
+});
+
+stage.addEventListener('mouseleave', () => {
+    remove(cursorRef).catch(() => { /* noop */ });
+});
+
 // Submit on Enter
 input.addEventListener('keydown', async (ev) => {
     if (ev.key !== 'Enter') return;
@@ -69,14 +106,14 @@ input.addEventListener('keydown', async (ev) => {
     }
 
     try {
-        await addDoc(collection(db, 'quickvibe_messages'), {
+        await push(messagesRef, {
             text,
             x: pendingPosition.x,
             y: pendingPosition.y,
             createdAt: serverTimestamp()
         });
     } catch (e) {
-        console.error('Error adding document:', e);
+        console.error('Error saving message:', e);
     }
 
     // Hide input and clear position
@@ -108,26 +145,125 @@ function removeBubble(id) {
     }
 }
 
-// Subscribe to collection changes, newest last
-const q = query(collection(db, 'quickvibe_messages'), orderBy('createdAt', 'asc'));
-onSnapshot(q, (snap) => {
-    // Strategy: render all documents present in the snapshot; remove those not present
+const cursorEls = new Map();
+const timelineEls = new Map();
+
+function colorForId(id) {
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) {
+        hash = ((hash << 5) - hash) + id.charCodeAt(i);
+        hash |= 0; // Convert to 32bit integer
+    }
+    const hue = Math.abs(hash) % 360;
+    return `hsl(${hue}, 80%, 60%)`;
+}
+
+function renderCursor(id, data) {
+    if (id === clientId) return; // don't render our own cursor overlay
+    let el = cursorEls.get(id);
+    if (!el) {
+        el = document.createElement('div');
+        el.className = 'cursor pointer-none';
+        stage.appendChild(el);
+        cursorEls.set(id, el);
+    }
+    el.style.setProperty('--cursor-color', colorForId(id));
+    el.style.left = `${data.x || 0}px`;
+    el.style.top = `${data.y || 0}px`;
+}
+
+function removeCursor(id) {
+    const el = cursorEls.get(id);
+    if (el && el.parentElement) {
+        el.parentElement.removeChild(el);
+    }
+    cursorEls.delete(id);
+}
+
+function formatTimestamp(ms) {
+    if (typeof ms !== 'number') return 'Pending...';
+    const date = new Date(ms);
+    if (Number.isNaN(date.getTime())) return 'Pending...';
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function renderTimelineItem(id, data, orderIndex) {
+    if (!timeline) return;
+    let el = timelineEls.get(id);
+    if (!el) {
+        el = document.createElement('div');
+        el.className = 'timeline-entry';
+        el.innerHTML = `
+            <div class="timeline-time"></div>
+            <div class="timeline-text"></div>
+        `;
+        timeline.appendChild(el);
+        timelineEls.set(id, el);
+    }
+    const timeEl = el.querySelector('.timeline-time');
+    const textEl = el.querySelector('.timeline-text');
+    if (timeEl) {
+        timeEl.textContent = formatTimestamp(data.createdAt);
+    }
+    if (textEl) {
+        textEl.textContent = (data.text || '').slice(0, 80);
+    }
+    el.style.order = orderIndex;
+}
+
+function removeTimelineItem(id) {
+    const el = timelineEls.get(id);
+    if (el && el.parentElement) {
+        el.parentElement.removeChild(el);
+    }
+    timelineEls.delete(id);
+}
+
+// Subscribe to database changes, newest last
+onValue(orderedMessagesQuery, (snap) => {
     const seen = new Set();
-    snap.forEach((doc) => {
-        const id = doc.id;
-        const data = doc.data();
+    const orderedEntries = [];
+    snap.forEach((childSnap) => {
+        const id = childSnap.key;
+        const data = childSnap.val() || {};
         seen.add(id);
+        orderedEntries.push({ id, data });
         renderBubble(id, data);
     });
 
-    // Remove any stale bubbles that aren't in the latest snapshot
+    orderedEntries.forEach(({ id, data }, index) => {
+        renderTimelineItem(id, data, index);
+    });
+
     const existing = Array.from(stage.querySelectorAll('.bubble'));
     existing.forEach((el) => {
         const id = el.getAttribute('data-id');
         if (id && !seen.has(id)) {
             removeBubble(id);
+            removeTimelineItem(id);
         }
     });
+
+    for (const id of Array.from(timelineEls.keys())) {
+        if (!seen.has(id)) {
+            removeTimelineItem(id);
+        }
+    }
 });
 
+onValue(cursorsRef, (snap) => {
+    const seen = new Set();
+    snap.forEach((childSnap) => {
+        const id = childSnap.key;
+        const data = childSnap.val();
+        if (!id || !data) return;
+        seen.add(id);
+        renderCursor(id, data);
+    });
 
+    for (const id of Array.from(cursorEls.keys())) {
+        if (!seen.has(id)) {
+            removeCursor(id);
+        }
+    }
+});

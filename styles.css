@@ -12,6 +12,7 @@ body {
     position: fixed;
     inset: 0;
     cursor: crosshair;
+    z-index: 1;
 }
 
 .bubble {
@@ -48,4 +49,61 @@ body {
 
 .pointer-none {
     pointer-events: none;
+}
+
+.cursor {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--cursor-color, #4c9aff);
+    box-shadow: 0 0 12px rgba(0, 0, 0, 0.45);
+    transform: translate(-50%, -50%);
+    transition: transform 0.05s linear;
+    will-change: transform;
+}
+
+#timeline {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 96px;
+    padding: 12px 18px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    overflow-x: auto;
+    background: rgba(10, 12, 17, 0.85);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    z-index: 5;
+}
+
+.timeline-entry {
+    flex: 0 0 auto;
+    min-width: 160px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.timeline-time {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.timeline-text {
+    font-size: 14px;
+    color: #f2f2f2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
