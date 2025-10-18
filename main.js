@@ -1,4 +1,4 @@
-// QuickVibe - Minimal spatial chat powered by Firebase Realtime Database (modular SDK)
+﻿// QuickVibe - Minimal spatial chat powered by Firebase Realtime Database (modular SDK)
 // Students: Paste your own Firebase config below where indicated.
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js";
@@ -15,29 +15,43 @@ import {
     query,
     orderByChild
 } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-database.js";
+import {
+    getAuth,
+    onAuthStateChanged,
+    signInWithPopup,
+    GoogleAuthProvider,
+    signOut
+} from "https://www.gstatic.com/firebasejs/12.3.0/firebase-auth.js";
 
 // =====================
 // 1) Firebase Setup
 // =====================
 // Replace the below placeholder object with YOUR Firebase project's web config.
 // How to get it:
-// - Go to Firebase console → Your project → Project settings → General → Your apps (Web)
+// - Go to Firebase console â†’ Your project â†’ Project settings â†’ General â†’ Your apps (Web)
 // - Click "+ Add app" if you don't have one, then copy the config
 // - Paste it here replacing every value (apiKey, authDomain, projectId, etc.)
 
 // Your web app's Firebase configuration
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
-    apiKey: "AIzaSyB3qxWLyU792p_GvKPVYG7SywtKmJ0_Hx8",
-    authDomain: "backendtest-d0dc6.firebaseapp.com",
-    projectId: "backendtest-d0dc6",
-    storageBucket: "backendtest-d0dc6.firebasestorage.app",
-    messagingSenderId: "701974952381",
-    appId: "1:701974952381:web:ef1b6563a48f00f95a3ad4",
-    measurementId: "G-9RPP665GDC"
+  apiKey: "AIzaSyB3qxWLyU792p_GvKPVYG7SywtKmJ0_Hx8",
+  authDomain: "backendtest-d0dc6.firebaseapp.com",
+  databaseURL: "https://backendtest-d0dc6-default-rtdb.firebaseio.com",
+  projectId: "backendtest-d0dc6",
+  storageBucket: "backendtest-d0dc6.firebasestorage.app",
+  messagingSenderId: "701974952381",
+  appId: "1:701974952381:web:ef1b6563a48f00f95a3ad4",
+  measurementId: "G-9RPP665GDC"
 };
 // Initialize Firebase and Realtime Database
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
+let currentUser = null;
+let authStatusResetTimeout = null;
 const messagesRef = ref(db, 'quickvibe_messages');
 const orderedMessagesQuery = query(messagesRef, orderByChild('createdAt'));
 const cursorsRef = ref(db, 'quickvibe_cursors');
@@ -59,6 +73,75 @@ window.addEventListener('unload', () => {
 const stage = document.getElementById('stage');
 const input = document.getElementById('floating-input');
 const timeline = document.getElementById('timeline');
+const authButton = document.getElementById('auth-button');
+const authStatus = document.getElementById('auth-status');
+
+function friendlyUserName(user) {
+    if (!user) return '';
+    if (user.displayName && user.displayName.trim()) return user.displayName.trim();
+    if (user.email && user.email.trim()) return user.email.trim();
+    return 'Anonymous';
+}
+
+function updateAuthUI(user) {
+    if (authButton) {
+        if (user) {
+            authButton.textContent = 'Sign Out';
+            authButton.classList.add('sign-out');
+        } else {
+            authButton.textContent = 'Sign In';
+            authButton.classList.remove('sign-out');
+        }
+    }
+    if (authStatus) {
+        authStatus.textContent = user
+            ? `Signed in as ${friendlyUserName(user)}`
+            : 'Signed out - Sign in to add notes.';
+    }
+    if (stage) {
+        stage.classList.toggle('signed-out', !user);
+    }
+    if (input) {
+        input.placeholder = user ? 'Type and hit Enter' : 'Sign in to add a note';
+    }
+}
+
+function showAuthMessage(message) {
+    if (!authStatus) return;
+    if (authStatusResetTimeout) {
+        clearTimeout(authStatusResetTimeout);
+    }
+    authStatus.textContent = message;
+    authStatusResetTimeout = setTimeout(() => {
+        authStatusResetTimeout = null;
+        updateAuthUI(currentUser);
+    }, 4000);
+}
+
+if (authButton) {
+    authButton.addEventListener('click', async () => {
+        if (!currentUser) {
+            try {
+                await signInWithPopup(auth, googleProvider);
+            } catch (err) {
+                if (err && err.code === 'auth/popup-closed-by-user') {
+                    return;
+                }
+                console.error('Sign-in failed:', err);
+                showAuthMessage('Sign-in failed. Try again.');
+            }
+        } else {
+            try {
+                await signOut(auth);
+            } catch (err) {
+                console.error('Sign-out failed:', err);
+                showAuthMessage('Sign-out failed. Please retry.');
+            }
+        }
+    });
+}
+
+updateAuthUI(currentUser);
 
 // =====================
 // 3) Input positioning
@@ -66,7 +149,29 @@ const timeline = document.getElementById('timeline');
 let pendingPosition = null; // { x, y } for the next message
 let lastCursorUpdate = 0;
 
+onAuthStateChanged(auth, async (user) => {
+    currentUser = user;
+    updateAuthUI(user);
+    if (!user) {
+        pendingPosition = null;
+        if (input) {
+            input.style.display = 'none';
+            input.value = '';
+        }
+        try {
+            await remove(cursorRef);
+        } catch (err) {
+            console.error('Failed to clear cursor on sign-out:', err);
+        }
+    }
+});
+
 stage.addEventListener('click', (ev) => {
+    if (!currentUser) {
+        showAuthMessage('Please sign in to add notes.');
+        if (authButton) authButton.focus();
+        return;
+    }
     const x = ev.clientX;
     const y = ev.clientY;
     pendingPosition = { x, y };
@@ -80,6 +185,7 @@ stage.addEventListener('click', (ev) => {
 });
 
 stage.addEventListener('mousemove', (ev) => {
+    if (!currentUser) return;
     const x = ev.clientX;
     const y = ev.clientY;
     const now = Date.now();
@@ -100,6 +206,12 @@ stage.addEventListener('mouseleave', () => {
 input.addEventListener('keydown', async (ev) => {
     if (ev.key !== 'Enter') return;
     const text = input.value.trim();
+    if (!currentUser) {
+        input.style.display = 'none';
+        pendingPosition = null;
+        showAuthMessage('Sign in to share something.');
+        return;
+    }
     if (!text || !pendingPosition) {
         input.style.display = 'none';
         return;
@@ -110,7 +222,10 @@ input.addEventListener('keydown', async (ev) => {
             text,
             x: pendingPosition.x,
             y: pendingPosition.y,
-            createdAt: serverTimestamp()
+            createdAt: serverTimestamp(),
+            uid: currentUser.uid,
+            author: friendlyUserName(currentUser),
+            photoURL: currentUser.photoURL || null
         });
     } catch (e) {
         console.error('Error saving message:', e);
@@ -131,9 +246,22 @@ function renderBubble(id, data) {
         el = document.createElement('div');
         el.className = 'bubble pointer-none';
         el.dataset.id = id;
+        const authorEl = document.createElement('div');
+        authorEl.className = 'bubble-author';
+        const textEl = document.createElement('div');
+        textEl.className = 'bubble-text';
+        el.appendChild(authorEl);
+        el.appendChild(textEl);
         stage.appendChild(el);
     }
-    el.textContent = data.text || '';
+    const authorEl = el.querySelector('.bubble-author');
+    const textEl = el.querySelector('.bubble-text');
+    if (authorEl) {
+        authorEl.textContent = data.author || 'Anonymous';
+    }
+    if (textEl) {
+        textEl.textContent = data.text || '';
+    }
     el.style.left = `${data.x || 0}px`;
     el.style.top = `${data.y || 0}px`;
 }
@@ -195,15 +323,20 @@ function renderTimelineItem(id, data, orderIndex) {
         el.className = 'timeline-entry';
         el.innerHTML = `
             <div class="timeline-time"></div>
+            <div class="timeline-author"></div>
             <div class="timeline-text"></div>
         `;
         timeline.appendChild(el);
         timelineEls.set(id, el);
     }
     const timeEl = el.querySelector('.timeline-time');
+    const authorEl = el.querySelector('.timeline-author');
     const textEl = el.querySelector('.timeline-text');
     if (timeEl) {
         timeEl.textContent = formatTimestamp(data.createdAt);
+    }
+    if (authorEl) {
+        authorEl.textContent = data.author || 'Anonymous';
     }
     if (textEl) {
         textEl.textContent = (data.text || '').slice(0, 80);
